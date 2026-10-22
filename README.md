@@ -1,5 +1,7 @@
 # Walkdeck
 
+https://lexslusarchyk.github.io/walkdeck/
+
 Desk remote for an **EnergyFIT EF-X512NS** walking treadmill, for a MacBook Pro (including M4).
 
 It talks to the pad over Bluetooth, the same way the Spax phone app does. Walks are saved in the browser on your Mac. Nothing is uploaded.
