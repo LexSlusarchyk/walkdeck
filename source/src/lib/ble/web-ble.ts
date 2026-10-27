@@ -118,9 +118,12 @@ export function pickPermitted(
 ) {
   if (devices.length === 0) return null;
   const name = saved.name.trim().toLowerCase();
-  return (
+  const exact =
     devices.find((device) => saved.id && device.id === saved.id) ??
-    devices.find((device) => name && device.name.trim().toLowerCase() === name) ??
-    (devices.length === 1 ? devices[0] : null)
-  );
+    devices.find((device) => name && device.name.trim().toLowerCase() === name);
+  if (exact) return exact;
+  const pads = devices.filter((device) => /treadmill|x512|fitshow|^fs/i.test(device.name));
+  if (pads.length === 1) return pads[0];
+  if (devices.length === 1) return devices[0];
+  return null;
 }

@@ -43,6 +43,33 @@ export type LinkHandlers = {
 };
 
 const OPTIONAL = [UUID.ftms, UUID.fit, UUID.info, UUID.hr];
+
+function deviceFilters(names?: string[]) {
+  const saved = (names ?? []).map((name) => name.trim()).filter(Boolean);
+  if (saved.length > 0) {
+    return saved.flatMap((name) => {
+      const brand = name.split("-")[0] ?? name;
+      return brand && brand !== name ? [{ name }, { namePrefix: brand }] : [{ name }, { namePrefix: name }];
+    });
+  }
+  return [
+    { namePrefix: "FS" },
+    { namePrefix: "Fs" },
+    { namePrefix: "EF" },
+    { namePrefix: "Ef" },
+    { namePrefix: "X512" },
+    { namePrefix: "SPAX" },
+    { namePrefix: "Spax" },
+    { namePrefix: "Fit" },
+    { namePrefix: "FIT" },
+    { namePrefix: "Walking" },
+    { namePrefix: "Treadmill" },
+    { namePrefix: "treadmill" },
+    { namePrefix: "TM" },
+    { services: [UUID.fit] },
+    { services: [UUID.ftms] },
+  ];
+}
 const MODEL_MIN_TENTHS = 10;
 const MODEL_MAX_TENTHS = 60;
 
@@ -136,6 +163,7 @@ export class PadLink {
     fitUser: number;
     picker: Picker;
     deviceId?: string;
+    names?: string[];
   }) {
     this.pref = opts.pref;
     this.weightKg = opts.weightKg;
@@ -156,23 +184,7 @@ export class PadLink {
           opts.picker === "all"
             ? await bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: OPTIONAL })
             : await bluetooth.requestDevice({
-                filters: [
-                  { namePrefix: "FS" },
-                  { namePrefix: "Fs" },
-                  { namePrefix: "EF" },
-                  { namePrefix: "Ef" },
-                  { namePrefix: "X512" },
-                  { namePrefix: "SPAX" },
-                  { namePrefix: "Spax" },
-                  { namePrefix: "Fit" },
-                  { namePrefix: "FIT" },
-                  { namePrefix: "Walking" },
-                  { namePrefix: "Treadmill" },
-                  { namePrefix: "treadmill" },
-                  { namePrefix: "TM" },
-                  { services: [UUID.fit] },
-                  { services: [UUID.ftms] },
-                ],
+                filters: deviceFilters(opts.names),
                 optionalServices: OPTIONAL,
               });
       } catch (err) {

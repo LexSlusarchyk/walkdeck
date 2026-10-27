@@ -370,6 +370,7 @@ export const useWalk = create<Store>((set, get) => ({
         fitUser: 0x51a2,
         picker: opts?.picker ?? "filtered",
         deviceId: chosen?.id,
+        names: chosen ? undefined : [get().settings.lastDeviceName],
       });
       if (get().protocolLabel === "Unknown") {
         set({
