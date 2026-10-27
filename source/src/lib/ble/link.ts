@@ -114,6 +114,8 @@ export class PadLink {
   private pref: ProtocolPref = "auto";
   private pendingKmh: number | null = null;
   private armedRun = false;
+  private lastReportedKmh = 0;
+  private lastSpeedCommandAt = 0;
   private minTenths = MODEL_MIN_TENTHS;
   private maxTenths = MODEL_MAX_TENTHS;
   private loggedIn = 0;
@@ -324,7 +326,9 @@ export class PadLink {
     ]);
     for (const info of [0x02, 0x03, 0x04, 0x01]) this.enqueue([0x50, info]);
     this.poll = setInterval(() => {
-      if (!this.userClosed && this.queue.length < 2) this.enqueue([0x51]);
+      if (this.userClosed) return;
+      this.retrySpeed();
+      if (this.queue.length < 2) this.enqueue([0x51]);
     }, 500);
   }
 
@@ -355,10 +359,11 @@ export class PadLink {
       }
       if (sample.phase === "running" && !this.armedRun) {
         this.armedRun = true;
-        if (this.pendingKmh != null) this.enqueue(this.speedCmd(this.pendingKmh));
+        if (this.pendingKmh != null) this.sendSpeedNow(this.pendingKmh);
       } else if (sample.phase && sample.phase !== "running" && sample.phase !== "countdown") {
         this.armedRun = false;
       }
+      if (typeof sample.speedKmh === "number") this.lastReportedKmh = sample.speedKmh;
       this.lastPhase = sample.phase ?? this.lastPhase;
       if (sample.phase || sample.speedKmh != null || sample.heart != null || sample.distanceKm != null) {
         this.handlers.onSample(sample);
@@ -473,11 +478,25 @@ export class PadLink {
 
   setSpeed(kmh: number) {
     this.pendingKmh = kmh;
+    if (!this.armedRun) return;
+    this.sendSpeedNow(kmh);
+  }
+
+  /** The pad ignores a speed write until it has been moving for a few seconds, so repeat it until the belt reports that speed. */
+  private retrySpeed() {
+    if (!this.armedRun || this.pendingKmh == null || this.userClosed) return;
+    if (Math.abs(this.lastReportedKmh - this.pendingKmh) < 0.15) return;
+    if (Date.now() - this.lastSpeedCommandAt < 1200) return;
+    this.sendSpeedNow(this.pendingKmh);
+  }
+
+  private sendSpeedNow(kmh: number) {
+    this.lastSpeedCommandAt = Date.now();
     if (this.protocol === "fitshow") {
-      if (this.armedRun) this.enqueue(this.speedCmd(kmh));
+      this.enqueue(this.speedCmd(kmh));
       return;
     }
-    if (this.armedRun) void this.ftmsSpeed(kmh);
+    void this.ftmsSpeed(kmh);
   }
 
   private async ftmsSpeed(kmh: number) {

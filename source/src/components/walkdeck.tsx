@@ -5,7 +5,7 @@ import { listPermitted } from "@/lib/ble/web-ble";
 import { formatDuration, formatKm, formatPace, roundTenth } from "@/lib/format";
 import { downloadStats, stopPadOnLeave, useWalk, type Session } from "@/lib/walk-store";
 
-const PRESETS = [1, 2, 3, 4, 5, 6];
+const PRESETS = [1, 2, 3, 4, 4.5, 5, 5.5, 6];
 const GOALS = [0, 15, 30, 45, 60];
 
 function lastDays(sessions: Session[], count: number) {
@@ -31,6 +31,44 @@ function lastDays(sessions: Session[], count: number) {
 
 function emptyWeek() {
   return Array.from({ length: 7 }, (_, i) => ({ key: `d${i}`, label: "", km: 0 }));
+}
+
+function todayHours(sessions: Session[]) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const dayStart = start.getTime();
+  const dayEnd = dayStart + 86_400_000;
+  const hours = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    km: 0,
+    label: hour % 6 === 0 ? String(hour).padStart(2, "0") : "",
+  }));
+  for (const session of sessions) {
+    const sessionEnd = session.startedAt + session.durationSec * 1000;
+    const segStart = Math.max(session.startedAt, dayStart);
+    const segEnd = Math.min(sessionEnd, dayEnd);
+    if (segEnd <= segStart) continue;
+    const span = Math.max(1, sessionEnd - session.startedAt);
+    let cursor = segStart;
+    while (cursor < segEnd) {
+      const stamp = new Date(cursor);
+      const hourEnd = new Date(stamp);
+      hourEnd.setMinutes(0, 0, 0);
+      hourEnd.setHours(stamp.getHours() + 1);
+      const sliceEnd = Math.min(segEnd, hourEnd.getTime());
+      hours[stamp.getHours()]!.km += session.distanceKm * ((sliceEnd - cursor) / span);
+      cursor = sliceEnd;
+    }
+  }
+  return hours;
+}
+
+function emptyDay() {
+  return Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    km: 0,
+    label: "",
+  }));
 }
 
 function sourceLabel(source: Session["source"]) {
@@ -169,7 +207,13 @@ export function Walkdeck() {
     () => (clock ? lastDays(state.sessions, 7) : emptyWeek()),
     [clock, state.sessions],
   );
+  const hours = useMemo(
+    () => (clock ? todayHours(state.sessions) : emptyDay()),
+    [clock, state.sessions],
+  );
   const weekKm = days.reduce((sum, day) => sum + day.km, 0);
+  const todayKm = hours.reduce((sum, hour) => sum + hour.km, 0);
+  const hourPeak = Math.max(0.05, ...hours.map((hour) => hour.km));
   const totalKm = state.sessions.reduce((sum, session) => sum + session.distanceKm, 0);
   const totalKcal = state.sessions.reduce((sum, session) => sum + session.kcal, 0);
   const peak = Math.max(1, ...days.map((day) => day.km));
@@ -437,11 +481,11 @@ export function Walkdeck() {
               <button
                 type="button"
                 onClick={() => state.stop()}
-                disabled={state.phase === "idle"}
+                disabled={state.phase === "idle" || state.phase === "stopping"}
                 className="inline-flex h-14 items-center justify-center gap-2 rounded-2xl bg-stop px-6 text-base font-semibold text-bg disabled:opacity-40"
               >
                 <Square className="size-4 fill-current" aria-hidden="true" />
-                Stop
+                {state.phase === "stopping" ? "Slowing" : "Stop"}
               </button>
             </div>
 
@@ -571,6 +615,26 @@ export function Walkdeck() {
             <p className="mt-4 text-sm text-muted">
               {formatKm(totalKm)} km saved · {state.sessions.length} walks · {Math.round(totalKcal).toLocaleString()} kcal
             </p>
+          </div>
+
+          <div className="rounded-card border border-line bg-panel p-5">
+            <div className="flex items-baseline justify-between">
+              <p className="text-xs font-medium tracking-widest text-muted">TODAY</p>
+              <p className="font-mono text-sm tabular-nums">{formatKm(todayKm)} km</p>
+            </div>
+            <div className="mt-4 flex h-28 items-end gap-0.5">
+              {hours.map((hour) => (
+                <div key={hour.hour} className="flex h-full min-w-0 flex-1 flex-col justify-end gap-2">
+                  <div
+                    className={hour.km > 0 ? "rounded-t-sm bg-led" : "rounded-t-sm bg-line"}
+                    style={{ height: `${Math.max(hour.km > 0 ? 8 : 3, (hour.km / hourPeak) * 100)}%` }}
+                    title={hour.km > 0 ? `${hour.hour}:00 · ${formatKm(hour.km)} km` : `${hour.hour}:00`}
+                  />
+                  <span className="truncate text-center text-[10px] text-muted">{hour.label}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-4 text-sm text-muted">Distance by hour, midnight to midnight.</p>
           </div>
 
           <div className="flex gap-2 rounded-card border border-line bg-panel px-4 py-3 text-sm text-muted">

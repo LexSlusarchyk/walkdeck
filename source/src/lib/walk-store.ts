@@ -120,6 +120,9 @@ let deviceKcalAt = 0;
 let distanceFreshUntil = 0;
 let pauseSentAt = 0;
 let remoteSpeed = 0;
+let userStopped = false;
+let userStoppedAt = 0;
+let userPaused = false;
 
 function pushLog(line: string) {
   const prev = useWalk.getState().log;
@@ -217,6 +220,16 @@ function markGoal(elapsed: number) {
   window.dispatchEvent(new CustomEvent("walkdeck-goal"));
 }
 
+function endUserStop() {
+  userStopped = false;
+  userStoppedAt = 0;
+}
+
+function endUserPause() {
+  userPaused = false;
+  pauseSentAt = 0;
+}
+
 function sendSpeed(kmh: number) {
   if (useWalk.getState().mode !== "pad" || !link) return;
   const phase = useWalk.getState().phase;
@@ -232,7 +245,7 @@ export const useWalk = create<Store>((set, get) => ({
   mode: "off",
   phase: "idle",
   speed: 0,
-  target: 3,
+  target: 1,
   elapsed: 0,
   distanceKm: 0,
   kcal: 0,
@@ -281,6 +294,8 @@ export const useWalk = create<Store>((set, get) => ({
 
   connect: async (opts) => {
     if (get().busy) return;
+    endUserStop();
+    endUserPause();
     set({ busy: true, error: "" });
     try {
       if (draft) finish("idle");
@@ -355,6 +370,8 @@ export const useWalk = create<Store>((set, get) => ({
   },
 
   disconnect: () => {
+    endUserStop();
+    endUserPause();
     if (get().mode === "pad") link?.stop();
     if (draft) finish("idle");
     link?.close();
@@ -373,6 +390,8 @@ export const useWalk = create<Store>((set, get) => ({
   },
 
   startDemo: () => {
+    endUserStop();
+    endUserPause();
     if (get().mode === "pad") {
       link?.stop();
       link?.close();
@@ -393,43 +412,81 @@ export const useWalk = create<Store>((set, get) => ({
   },
 
   begin: () => {
-    const { mode, phase, target } = get();
-    if (mode === "off") return;
-    if (phase === "running" || phase === "countdown") return;
+    const { mode, phase } = get();
+    if (mode === "off" || userStopped) return;
+    if (phase === "running" || phase === "countdown" || phase === "stopping") return;
     set({ error: "" });
     if (phase === "paused") {
+      endUserPause();
+      const target = get().target;
       set({ phase: "countdown", countdown: 3 });
       if (mode === "pad") link?.start(target);
       return;
     }
+    // The pad always starts the belt at 1 km/h, a few seconds before it will accept another speed.
+    const startKmh = floorNow();
     ensureDraft(mode === "pad" ? "pad" : "demo");
-    set({ phase: "countdown", countdown: 3, speed: 0 });
-    if (mode === "pad") link?.start(target);
+    set({ phase: "countdown", countdown: 3, speed: 0, target: startKmh });
+    if (mode === "pad") link?.start(startKmh);
   },
 
   pause: () => {
     const { mode, phase } = get();
     if (phase !== "running" && phase !== "countdown") return;
-    pauseSentAt = mode === "pad" ? Date.now() : 0;
+    userPaused = true;
+    pauseSentAt = Date.now();
     set({ phase: "paused", countdown: null, error: "" });
     if (mode === "pad") link?.pause();
   },
 
   stop: () => {
-    const { mode, phase } = get();
-    if (phase === "idle" && !draft) return;
+    const { mode, phase, speed } = get();
+    if (mode === "off") return;
+    if (phase === "idle" && !draft && !userStopped) return;
     if (mode === "pad") link?.stop();
-    if (mode === "demo" && get().speed > 0.2) {
-      set({ phase: "stopping", countdown: null });
+    endUserPause();
+    if (userStopped) return;
+    const moving = speed > 0.2 || phase === "running" || phase === "stopping";
+    userStopped = true;
+    userStoppedAt = Date.now();
+    finish("idle");
+    if (!moving) {
+      endUserStop();
+    endUserPause();
+      set({ phase: "idle", speed: 0, countdown: null });
       return;
     }
-    finish("idle");
-    set({ phase: "idle", speed: 0, countdown: null });
+    set({
+      phase: "stopping",
+      countdown: null,
+      speed,
+      note: "Stopping. The belt slows for a few seconds.",
+    });
   },
 
   tick: () => {
     const s = get();
     if (s.mode === "off") return;
+    if (userStopped) {
+      if (s.mode === "demo") {
+        const speed = Math.max(0, roundTenth(s.speed - 0.35));
+        if (speed <= 0.05) {
+          endUserStop();
+    endUserPause();
+          set({ phase: "idle", speed: 0 });
+        } else {
+          set({ phase: "stopping", speed });
+        }
+        return;
+      }
+      if (Date.now() - userStoppedAt > 12000) {
+        endUserStop();
+    endUserPause();
+        set({ phase: "idle", speed: 0, countdown: null });
+      }
+      return;
+    }
+    if (userPaused && s.mode === "pad") return;
     const dt = 0.2;
     if (s.mode === "demo") {
       if (s.phase === "countdown") {
@@ -466,19 +523,6 @@ export const useWalk = create<Store>((set, get) => ({
 
     if (s.linkState === "reconnecting") return;
 
-    if (
-      s.phase === "paused" &&
-      pauseSentAt > 0 &&
-      Date.now() - pauseSentAt > 2200 &&
-      remoteSpeed > 0.35
-    ) {
-      pauseSentAt = 0;
-      set({
-        phase: "running",
-        error: "Pause did not take. The belt is still moving — press Stop.",
-      });
-    }
-
     if (s.phase === "countdown") {
       set({ countdown: Math.max(0, (s.countdown ?? 3) - dt) });
     }
@@ -502,6 +546,49 @@ export const useWalk = create<Store>((set, get) => ({
 
   applyRemote: (sample) => {
     if (get().mode !== "pad") return;
+    if (userStopped) {
+      if (sample.phase === "safety" || sample.phase === "fault") {
+        endUserStop();
+    endUserPause();
+        finish(sample.phase);
+        return;
+      }
+      if (typeof sample.speedKmh === "number") remoteSpeed = sample.speedKmh;
+      const speed = typeof sample.speedKmh === "number" ? sample.speedKmh : remoteSpeed;
+      const settled =
+        sample.phase === "idle" ||
+        sample.phase === "paused" ||
+        speed < 0.25 ||
+        Date.now() - userStoppedAt > 12000;
+      if (settled) {
+        endUserStop();
+    endUserPause();
+        set({ phase: "idle", speed: 0, countdown: null });
+      } else {
+        set({ phase: "stopping", speed, countdown: null });
+      }
+      return;
+    }
+    if (userPaused) {
+      if (sample.phase === "safety" || sample.phase === "fault") {
+        endUserPause();
+        finish(sample.phase);
+        return;
+      }
+      if (typeof sample.speedKmh === "number") remoteSpeed = sample.speedKmh;
+      const speed = typeof sample.speedKmh === "number" ? sample.speedKmh : remoteSpeed;
+      if (sample.phase === "idle" && speed < 0.4) {
+        endUserPause();
+        finish("idle");
+        return;
+      }
+      set({
+        phase: "paused",
+        countdown: null,
+        speed: speed < 0.3 ? 0 : speed,
+      });
+      return;
+    }
     if (sample.phase === "safety") {
       finish("safety");
       return;
