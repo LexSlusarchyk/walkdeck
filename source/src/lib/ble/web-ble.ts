@@ -111,3 +111,16 @@ export async function listPermitted(): Promise<Array<{ id: string; name: string 
 export function permittedDevice(id: string): BleDevice | null {
   return permitted.get(id) ?? null;
 }
+
+export function pickPermitted(
+  devices: Array<{ id: string; name: string }>,
+  saved: { id: string; name: string },
+) {
+  if (devices.length === 0) return null;
+  const name = saved.name.trim().toLowerCase();
+  return (
+    devices.find((device) => saved.id && device.id === saved.id) ??
+    devices.find((device) => name && device.name.trim().toLowerCase() === name) ??
+    (devices.length === 1 ? devices[0] : null)
+  );
+}

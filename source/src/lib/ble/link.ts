@@ -39,6 +39,7 @@ export type LinkHandlers = {
   onLimits: (limits: { min: number; max: number }) => void;
   onDisconnect: (message: string) => void;
   onLink: (state: LinkState) => void;
+  onDevice?: (device: { id: string; name: string }) => void;
 };
 
 const OPTIONAL = [UUID.ftms, UUID.fit, UUID.info, UUID.hr];
@@ -166,6 +167,8 @@ export class PadLink {
                   { namePrefix: "Fit" },
                   { namePrefix: "FIT" },
                   { namePrefix: "Walking" },
+                  { namePrefix: "Treadmill" },
+                  { namePrefix: "treadmill" },
                   { namePrefix: "TM" },
                   { services: [UUID.fit] },
                   { services: [UUID.ftms] },
@@ -177,6 +180,7 @@ export class PadLink {
       }
     }
     this.device = device;
+    this.handlers.onDevice?.({ id: device.id, name: device.name || "Walking pad" });
     device.addEventListener("gattserverdisconnected", this.onGattDown);
     await this.openGatt();
   }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Bluetooth, Download, Keyboard, Minus, Pause, Play, Plus, ShieldAlert, Square, Trash2 } from "lucide-react";
 import { blocker, detectHost, macName, refineHost, type BleHost } from "@/lib/ble/host";
-import { listPermitted } from "@/lib/ble/web-ble";
+import { listPermitted, pickPermitted } from "@/lib/ble/web-ble";
 import { formatDuration, formatKm, formatPace, roundTenth } from "@/lib/format";
 import { downloadStats, stopPadOnLeave, useWalk, type Session } from "@/lib/walk-store";
 
@@ -78,6 +78,7 @@ function sourceLabel(source: Session["source"]) {
 }
 
 let audioCtx: AudioContext | null = null;
+let triedAutoLink = false;
 
 type BeforeInstallPrompt = Event & {
   prompt: () => Promise<void>;
@@ -124,7 +125,15 @@ export function Walkdeck() {
     setHost(detected);
     void refineHost(detected).then(setHost);
     setClock(true);
-    void listPermitted().then(setKnown);
+    void listPermitted().then((devices) => {
+      setKnown(devices);
+      if (triedAutoLink) return;
+      triedAutoLink = true;
+      const settings = useWalk.getState().settings;
+      const chosen = pickPermitted(devices, { id: settings.lastDeviceId, name: settings.lastDeviceName });
+      if (!chosen || useWalk.getState().mode !== "off") return;
+      void useWalk.getState().connect({ deviceId: chosen.id, knownOnly: true, quiet: true });
+    });
     const id = window.setInterval(() => useWalk.getState().tick(), 200);
     const onKey = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement | null)?.tagName;
@@ -222,7 +231,10 @@ export function Walkdeck() {
   const blocked = host ? blocker(host) : null;
   const needsWindow = Boolean(host?.embedded && !blocked);
   const canConnectHere = Boolean(host && !blocked && !host.embedded);
-  const remembered = known.find((device) => device.id === state.settings.lastDeviceId);
+  const remembered = pickPermitted(known, {
+    id: state.settings.lastDeviceId,
+    name: state.settings.lastDeviceName,
+  });
   const ceiling =
     linked && state.deviceMax > 0
       ? Math.min(6, state.settings.ceilingKmh, state.deviceMax)
@@ -267,7 +279,12 @@ export function Walkdeck() {
     }
   }
 
-  async function connect(opts: { deviceId?: string; picker?: "filtered" | "all" }) {
+  async function connect(opts: {
+    deviceId?: string;
+    picker?: "filtered" | "all";
+    knownOnly?: boolean;
+    quiet?: boolean;
+  }) {
     await state.connect(opts);
     setKnown(await listPermitted());
   }
@@ -308,7 +325,7 @@ export function Walkdeck() {
                 popOut();
                 return;
               }
-              void connect(remembered ? { deviceId: remembered.id } : { picker: "filtered" });
+              void connect(remembered ? { deviceId: remembered.id } : {});
             }}
             disabled={state.busy || (linked ? false : !needsWindow && !canConnectHere)}
             className="inline-flex h-11 max-w-56 items-center gap-2 rounded-full bg-led px-4 text-sm font-semibold text-bg disabled:opacity-40"
@@ -543,7 +560,7 @@ export function Walkdeck() {
                 <li>On the MacBook Pro, use Chrome, Edge, Brave, or Arc. Safari cannot open Bluetooth.</li>
                 <li>If you are inside chat, choose Open Mac window so the page is not embedded.</li>
                 <li>System Settings, Privacy & Security, Bluetooth — allow that browser. Do not pair the pad in the macOS device list. Forget it there if you already did.</li>
-                <li>Quit Spax on your phone. Power the pad, clip the safety key, then connect. The name usually starts with FS.</li>
+                <li>Quit Spax on your phone. Power the pad, clip the safety key, then connect. Choose the treadmill once. Next time this page reconnects to it without the pairing window.</li>
               </ol>
             ) : (
               <p className="mt-4 text-sm leading-relaxed text-muted">

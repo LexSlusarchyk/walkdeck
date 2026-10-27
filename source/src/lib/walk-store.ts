@@ -3,7 +3,7 @@ import type { Phase, RemoteSample } from "@/lib/ble/codec";
 import { PadLink, explainBleError, type LinkState, type Picker, type ProtocolPref } from "@/lib/ble/link";
 import { kcalPerSecond } from "@/lib/energy";
 import { clamp, plausibleTotal, roundTenth } from "@/lib/format";
-import { permittedDevice } from "@/lib/ble/web-ble";
+import { listPermitted, permittedDevice, pickPermitted } from "@/lib/ble/web-ble";
 
 export type WalkSource = "pad" | "demo" | "manual";
 
@@ -71,6 +71,12 @@ function save(data: Persisted) {
   localStorage.setItem(KEY, JSON.stringify(data));
 }
 
+function rememberPad(id: string, name: string) {
+  const settings = { ...useWalk.getState().settings, lastDeviceId: id, lastDeviceName: name };
+  save({ settings, sessions: useWalk.getState().sessions });
+  useWalk.setState({ settings });
+}
+
 type Store = Persisted & {
   hydrated: boolean;
   mode: "off" | "demo" | "pad";
@@ -99,7 +105,7 @@ type Store = Persisted & {
   setSettings: (patch: Partial<Settings>) => void;
   setTarget: (kmh: number) => void;
   nudge: (delta: number) => void;
-  connect: (opts?: { deviceId?: string; picker?: Picker }) => Promise<void>;
+  connect: (opts?: { deviceId?: string; picker?: Picker; knownOnly?: boolean; quiet?: boolean }) => Promise<void>;
   disconnect: () => void;
   startDemo: () => void;
   begin: () => void;
@@ -304,6 +310,7 @@ export const useWalk = create<Store>((set, get) => ({
       link = new PadLink({
         onSample: (sample) => get().applyRemote(sample),
         onLog: pushLog,
+        onDevice: (device) => rememberPad(device.id, device.name),
         onLink: (linkState) =>
           set({
             linkState,
@@ -344,16 +351,25 @@ export const useWalk = create<Store>((set, get) => ({
           link = null;
         },
       });
-      const picker = opts?.picker ?? "filtered";
-      if (opts?.deviceId && !permittedDevice(opts.deviceId)) {
+      const devices = await listPermitted();
+      const savedId = opts?.deviceId || get().settings.lastDeviceId;
+      const chosen = opts?.picker
+        ? null
+        : pickPermitted(devices, { id: savedId, name: get().settings.lastDeviceName });
+      if (!chosen && opts?.knownOnly) {
+        link.close();
+        link = null;
+        return;
+      }
+      if (chosen && !permittedDevice(chosen.id)) {
         throw new Error("That pad is not permitted yet. Choose it from the Bluetooth list once.");
       }
       await link.connect({
         pref: get().settings.protocol,
         weightKg: get().settings.weightKg,
         fitUser: 0x51a2,
-        picker,
-        deviceId: opts?.deviceId,
+        picker: opts?.picker ?? "filtered",
+        deviceId: chosen?.id,
       });
       if (get().protocolLabel === "Unknown") {
         set({
@@ -363,7 +379,16 @@ export const useWalk = create<Store>((set, get) => ({
     } catch (err) {
       link?.close();
       link = null;
-      set({ error: explainBleError(err), mode: "off", linkState: "down" });
+      const message = explainBleError(err);
+      if (opts?.quiet) {
+        set({
+          mode: "off",
+          linkState: "down",
+          note: "Turn the pad on, then press Reconnect. The pairing window is not needed again.",
+        });
+      } else {
+        set({ error: message, mode: "off", linkState: "down" });
+      }
     } finally {
       set({ busy: false });
     }
